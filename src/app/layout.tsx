@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { Vote } from "lucide-react";
 import ConnectWalletButton from "@/components/ConnectWalletButton";
+import { Web3Provider } from "@/context/Web3Context";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -44,11 +45,13 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${inter.className} bg-gray-900 text-white`}>
-        <div className="min-h-screen flex flex-col">
-          <Header />
-          <main className="flex-grow">{children}</main>
-          <Footer />
-        </div>
+        <Web3Provider>
+          <div className="min-h-screen flex flex-col">
+            <Header />
+            <main className="flex-grow">{children}</main>
+            <Footer />
+          </div>
+        </Web3Provider>
       </body>
     </html>
   );

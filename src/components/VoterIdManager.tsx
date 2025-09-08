@@ -2,12 +2,9 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { ethers } from "ethers";
-import {
-  REGISTRY_CONTRACT_ADDRESS,
-  REGISTRY_CONTRACT_ABI,
-} from "@/lib/constants";
+import { REGISTRY_CONTRACT_ABI } from "@/lib/constants";
+import { useWeb3 } from "@/context/Web3Context"; // 1. Import the useWeb3 hook
 
-// Defines all possible steps in the user's registration journey
 type FlowState =
   | "CONNECT_WALLET"
   | "SHOW_FORM"
@@ -19,38 +16,28 @@ type FlowState =
   | "LOADING"
   | "ERROR";
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const REGISTRY_CONTRACT_ADDRESS =
+  process.env.NEXT_PUBLIC_REGISTRY_CONTRACT_ADDRESS;
+
 export default function VoterIdManager() {
-  const [account, setAccount] = useState<string | null>(null);
+  // 2. Consume the Web3 context to get the global account state
+  const { account, provider, signer, connectWallet } = useWeb3();
+
+  // All local component state remains the same
   const [state, setState] = useState<FlowState>("CONNECT_WALLET");
   const [loadingMessage, setLoadingMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
 
-  // Form state for user input
   const [email, setEmail] = useState("");
   const [regNumber, setRegNumber] = useState("");
   const [otp, setOtp] = useState("");
 
-  const connectWallet = async () => {
-    if (typeof window.ethereum === "undefined") {
-      alert("Please install MetaMask!");
-      return;
-    }
-    try {
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
-      const address = await signer.getAddress();
-      setAccount(address);
-    } catch (error) {
-      console.error("Failed to connect wallet:", error);
-      setState("ERROR");
-      setErrorMessage("Failed to connect wallet.");
-    }
-  };
-
   const getContract = useCallback(
     (signerOrProvider: ethers.Signer | ethers.Provider) => {
       return new ethers.Contract(
-        REGISTRY_CONTRACT_ADDRESS,
+        REGISTRY_CONTRACT_ADDRESS!,
         REGISTRY_CONTRACT_ABI,
         signerOrProvider,
       );
@@ -58,42 +45,52 @@ export default function VoterIdManager() {
     [],
   );
 
-  const checkStatus = useCallback(async () => {
-    if (!account) return;
+  const checkStatus = useCallback(
+    async (showLoading: boolean = true) => {
+      // This function now uses the 'account' from the context
+      if (!account || !provider)
+        return { isWhitelisted: false, hasMinted: false };
 
-    setState("CHECKING_STATUS");
-    setLoadingMessage("Checking your status on the blockchain...");
-    try {
-      // Add a specific check right here to satisfy TypeScript
-      if (typeof window.ethereum === "undefined") {
-        throw new Error("MetaMask is not installed or not detected.");
+      if (showLoading) {
+        setState("CHECKING_STATUS");
+        setLoadingMessage("Checking your status on the blockchain...");
       }
 
-      // Use a public provider for read-only calls
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      const contract = getContract(provider);
+      try {
+        // We can use the provider directly from the context for read-only calls
+        const contract = getContract(provider);
 
-      const hasMinted = await contract.hasMinted(account);
-      if (hasMinted) {
-        setState("MINTED");
-        return;
+        const hasMinted = await contract.hasMinted(account);
+        if (hasMinted) {
+          setState("MINTED");
+          return { isWhitelisted: true, hasMinted: true };
+        }
+
+        const isWhitelisted = await contract.isWhitelisted(account);
+        if (isWhitelisted) {
+          setState("WHITELISTED");
+          return { isWhitelisted: true, hasMinted: false };
+        } else {
+          setState("NOT_WHITELISTED");
+          return { isWhitelisted: false, hasMinted: false };
+        }
+      } catch (error) {
+        console.error("Error checking status:", error);
+        setState("ERROR");
+        setErrorMessage(
+          "Could not check status. Please ensure your wallet is connected to the Sepolia network and try again.",
+        );
+        return { isWhitelisted: false, hasMinted: false };
+      } finally {
+        if (showLoading) {
+          setLoadingMessage("");
+        }
       }
+    },
+    [account, provider, getContract],
+  );
 
-      const isWhitelisted = await contract.isWhitelisted(account);
-      if (isWhitelisted) {
-        setState("WHITELISTED");
-      } else {
-        setState("NOT_WHITELISTED");
-      }
-    } catch (error) {
-      console.error("Error checking status:", error);
-      setState("ERROR");
-      setErrorMessage("Could not check your on-chain status.");
-    } finally {
-      setLoadingMessage("");
-    }
-  }, [account, getContract]);
-
+  // 3. The main useEffect now perfectly reacts to the global account state
   useEffect(() => {
     if (account) {
       checkStatus();
@@ -102,7 +99,7 @@ export default function VoterIdManager() {
     }
   }, [account, checkStatus]);
 
-  // Handles submitting the registration form to our backend
+  // ... All other logic (handleOtpSubmit, etc.) remains the same ...
   const handleRegistrationSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setState("LOADING");
@@ -129,11 +126,34 @@ export default function VoterIdManager() {
     }
   };
 
-  // Handles submitting the OTP to our backend for verification and whitelisting
+  const pollForWhitelistStatus = async () => {
+    setLoadingMessage(
+      "Whitelist transaction sent! Verifying on-chain status...",
+    );
+    const maxAttempts = 5;
+    const delay = 4000;
+
+    for (let i = 0; i < maxAttempts; i++) {
+      const status = await checkStatus(false);
+      if (status.isWhitelisted) {
+        setLoadingMessage("");
+        return;
+      }
+      setLoadingMessage(`Verifying... Attempt ${i + 1}/${maxAttempts}`);
+      await sleep(delay);
+    }
+
+    setLoadingMessage("");
+    setState("ERROR");
+    setErrorMessage(
+      "Verification timed out. The network is busy. Please check back in a minute.",
+    );
+  };
+
   const handleOtpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setState("LOADING");
-    setLoadingMessage("Verifying OTP and whitelisting on-chain...");
+    setLoadingMessage("Verifying OTP...");
     setErrorMessage("");
     try {
       const res = await fetch("/api/verify-otp", {
@@ -145,29 +165,24 @@ export default function VoterIdManager() {
       if (!res.ok) {
         throw new Error(data.message || "OTP verification failed.");
       }
-      // Success! Re-check status on chain to confirm the whitelist transaction
-      await checkStatus();
+
+      await pollForWhitelistStatus();
     } catch (error: unknown) {
-      setState("ENTER_OTP"); // Go back to OTP screen on failure
+      setState("ENTER_OTP");
       if (error instanceof Error) {
-        setErrorMessage(error.message);
+        setLoadingMessage(error.message);
       }
-    } finally {
-      setLoadingMessage("");
     }
   };
 
-  // Calls the smart contract directly from the frontend to mint the NFT
   const claimVoterId = async () => {
-    if (typeof window.ethereum === "undefined" || !account) return;
+    // It now uses the 'signer' from the context for transactions
+    if (!signer || !account) return;
 
-    console.log(REGISTRY_CONTRACT_ADDRESS);
     setState("LOADING");
     setLoadingMessage("Preparing transaction... Please confirm in MetaMask.");
     setErrorMessage("");
     try {
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
       const contract = getContract(signer);
 
       const tx = await contract.claimVoterId();
@@ -176,22 +191,19 @@ export default function VoterIdManager() {
       );
       await tx.wait();
 
-      setLoadingMessage("Success! Checking new status...");
       await checkStatus();
     } catch (error: unknown) {
       console.error("Failed to claim Voter ID:", error);
-      setState("WHITELISTED"); // Go back to the previous state on failure
-      if (error instanceof Error) {
-        setErrorMessage("Transaction failed or was rejected.");
-      }
+      setState("WHITELISTED");
+      setErrorMessage("Transaction failed or was rejected.");
     } finally {
       setLoadingMessage("");
     }
   };
 
-  // Dynamically renders the UI based on the current state
   const renderContent = () => {
     switch (state) {
+      // The "Connect Wallet" button now calls the function from the context
       case "CONNECT_WALLET":
         return (
           <button
@@ -202,6 +214,7 @@ export default function VoterIdManager() {
           </button>
         );
 
+      // ... All other cases remain the same ...
       case "CHECKING_STATUS":
         return <p className="text-gray-300">Checking your status...</p>;
 
@@ -321,7 +334,7 @@ export default function VoterIdManager() {
           <div>
             <p className="text-red-500 mb-4">{errorMessage}</p>
             <button
-              onClick={checkStatus}
+              onClick={() => checkStatus()}
               className="px-6 py-2 font-semibold text-white bg-gray-600 rounded-lg hover:bg-gray-700"
             >
               Try Again
@@ -332,6 +345,21 @@ export default function VoterIdManager() {
         return null;
     }
   };
+
+  if (!REGISTRY_CONTRACT_ADDRESS) {
+    return (
+      <div className="w-full max-w-lg p-8 bg-red-900/50 border border-red-700 rounded-2xl text-center">
+        <h2 className="text-2xl font-bold mb-4">Configuration Error</h2>
+        <p className="text-red-200">
+          The smart contract address is missing. Please contact the site
+          administrator.
+        </p>
+        <p className="font-mono text-xs mt-4 text-red-300">
+          Error: NEXT_PUBLIC_REGISTRY_CONTRACT_ADDRESS is not set.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full max-w-lg p-8 bg-gray-800 border border-gray-700 rounded-2xl shadow-lg text-center transition-all duration-300">

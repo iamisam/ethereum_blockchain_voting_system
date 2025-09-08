@@ -1,36 +1,27 @@
-"use client"; // This is a client component, as it uses hooks and event listeners
+"use client";
 
-import { useState, useEffect } from "react";
-import { ethers } from "ethers";
+import { useWeb3 } from "@/context/Web3Context";
 
 export default function ConnectWalletButton() {
-  const [account, setAccount] = useState<string | null>(null);
-
-  async function connectWallet() {
-    if (typeof window.ethereum !== "undefined") {
-      try {
-        const provider = new ethers.BrowserProvider(window.ethereum);
-        // It will prompt user to connect their wallet
-        const signer = await provider.getSigner();
-        const address = await signer.getAddress();
-        setAccount(address);
-      } catch (error) {
-        console.error("Failed to connect wallet:", error);
-      }
-    } else {
-      alert("Please install MetaMask!");
-    }
-  }
+  const { account, connectWallet, disconnectWallet } = useWeb3();
 
   return (
-    <div>
+    <div className="flex items-center space-x-2">
       {account ? (
-        <div className="p-3 bg-gray-800 rounded-lg text-white">
-          <p className="text-sm font-mono">
-            Connected:{" "}
-            {`${account.substring(0, 6)}...${account.substring(account.length - 4)}`}
-          </p>
-        </div>
+        <>
+          <div className="p-3 bg-gray-800 rounded-lg text-white border border-gray-700">
+            <p className="text-sm font-mono">
+              {`${account.substring(0, 6)}...${account.substring(account.length - 4)}`}
+            </p>
+          </div>
+          <button
+            onClick={disconnectWallet}
+            className="px-4 py-3 font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
+            title="Disconnect Wallet"
+          >
+            Disconnect
+          </button>
+        </>
       ) : (
         <button
           onClick={connectWallet}

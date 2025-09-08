@@ -3,6 +3,7 @@
 import { ShieldCheck, Lock, Users, ArrowRight, Layers } from "lucide-react";
 import React from "react";
 import Link from "next/link";
+import { Web3Provider } from "@/context/Web3Context";
 
 // Main Page Component
 export default function Home() {
