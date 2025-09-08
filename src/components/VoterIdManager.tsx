@@ -70,7 +70,7 @@ export default function VoterIdManager() {
       }
 
       // Use a public provider for read-only calls
-      const provider = new ethers.JsonRpcProvider("https://rpc.sepolia.org");
+      const provider = new ethers.BrowserProvider(window.ethereum);
       const contract = getContract(provider);
 
       const hasMinted = await contract.hasMinted(account);
