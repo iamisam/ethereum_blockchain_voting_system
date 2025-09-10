@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { ethers } from "ethers";
 import { REGISTRY_CONTRACT_ABI } from "@/lib/constants";
-import { useWeb3 } from "@/context/Web3Context"; // 1. Import the useWeb3 hook
+import { useWeb3 } from "@/context/Web3Context";
 
 type FlowState =
   | "CONNECT_WALLET"
@@ -16,20 +16,15 @@ type FlowState =
   | "LOADING"
   | "ERROR";
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
 const REGISTRY_CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_REGISTRY_CONTRACT_ADDRESS;
 
 export default function VoterIdManager() {
-  // 2. Consume the Web3 context to get the global account state
   const { account, provider, signer, connectWallet } = useWeb3();
 
-  // All local component state remains the same
   const [state, setState] = useState<FlowState>("CONNECT_WALLET");
   const [loadingMessage, setLoadingMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
-
   const [email, setEmail] = useState("");
   const [regNumber, setRegNumber] = useState("");
   const [otp, setOtp] = useState("");
@@ -45,52 +40,64 @@ export default function VoterIdManager() {
     [],
   );
 
-  const checkStatus = useCallback(
-    async (showLoading: boolean = true) => {
-      // This function now uses the 'account' from the context
-      if (!account || !provider)
-        return { isWhitelisted: false, hasMinted: false };
+  // --- THIS FUNCTION IS NOW FIXED AND SMARTER ---
+  const checkStatus = useCallback(async () => {
+    if (!account) return;
 
-      if (showLoading) {
-        setState("CHECKING_STATUS");
-        setLoadingMessage("Checking your status on the blockchain...");
-      }
+    setState("CHECKING_STATUS");
+    setLoadingMessage("Checking your status...");
+    setErrorMessage("");
 
-      try {
-        // We can use the provider directly from the context for read-only calls
-        const contract = getContract(provider);
+    try {
+      // Step 1: Check our own database first. It's faster.
+      const dbStatusRes = await fetch("/api/get-user-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ walletAddress: account }),
+      });
 
-        const hasMinted = await contract.hasMinted(account);
-        if (hasMinted) {
-          setState("MINTED");
-          return { isWhitelisted: true, hasMinted: true };
-        }
-
-        const isWhitelisted = await contract.isWhitelisted(account);
-        if (isWhitelisted) {
-          setState("WHITELISTED");
-          return { isWhitelisted: true, hasMinted: false };
-        } else {
-          setState("NOT_WHITELISTED");
-          return { isWhitelisted: false, hasMinted: false };
-        }
-      } catch (error) {
-        console.error("Error checking status:", error);
-        setState("ERROR");
-        setErrorMessage(
-          "Could not check status. Please ensure your wallet is connected to the Sepolia network and try again.",
-        );
-        return { isWhitelisted: false, hasMinted: false };
-      } finally {
-        if (showLoading) {
-          setLoadingMessage("");
+      if (dbStatusRes.ok) {
+        const dbStatus = await dbStatusRes.json();
+        if (dbStatus.exists) {
+          if (dbStatus.hasMintedNFT) {
+            setState("MINTED");
+            return;
+          }
+          if (dbStatus.isWhitelisted) {
+            setState("WHITELISTED");
+            return;
+          }
         }
       }
-    },
-    [account, provider, getContract],
-  );
 
-  // 3. The main useEffect now perfectly reacts to the global account state
+      // Step 2: If not found in DB or not yet whitelisted, check the blockchain as the source of truth.
+      if (!provider) throw new Error("Wallet provider not available.");
+
+      setLoadingMessage("Checking status on the blockchain...");
+      const contract = getContract(provider);
+      const hasMinted = await contract.hasMinted(account);
+      if (hasMinted) {
+        setState("MINTED");
+        return;
+      }
+
+      const isWhitelisted = await contract.isWhitelisted(account);
+      if (isWhitelisted) {
+        setState("WHITELISTED");
+      } else {
+        setState("NOT_WHITELISTED");
+      }
+    } catch (error) {
+      console.error("Error checking status:", error);
+      setState("ERROR");
+      setErrorMessage(
+        "Could not check status. Please ensure your wallet is connected to the Sepolia network and try again.",
+      );
+    } finally {
+      setLoadingMessage("");
+    }
+  }, [account, provider, getContract]);
+
   useEffect(() => {
     if (account) {
       checkStatus();
@@ -99,7 +106,6 @@ export default function VoterIdManager() {
     }
   }, [account, checkStatus]);
 
-  // ... All other logic (handleOtpSubmit, etc.) remains the same ...
   const handleRegistrationSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setState("LOADING");
@@ -126,34 +132,11 @@ export default function VoterIdManager() {
     }
   };
 
-  const pollForWhitelistStatus = async () => {
-    setLoadingMessage(
-      "Whitelist transaction sent! Verifying on-chain status...",
-    );
-    const maxAttempts = 5;
-    const delay = 4000;
-
-    for (let i = 0; i < maxAttempts; i++) {
-      const status = await checkStatus(false);
-      if (status.isWhitelisted) {
-        setLoadingMessage("");
-        return;
-      }
-      setLoadingMessage(`Verifying... Attempt ${i + 1}/${maxAttempts}`);
-      await sleep(delay);
-    }
-
-    setLoadingMessage("");
-    setState("ERROR");
-    setErrorMessage(
-      "Verification timed out. The network is busy. Please check back in a minute.",
-    );
-  };
-
+  // --- THIS FUNCTION IS NOW FIXED ---
   const handleOtpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setState("LOADING");
-    setLoadingMessage("Verifying OTP...");
+    setLoadingMessage("Verifying OTP and whitelisting...");
     setErrorMessage("");
     try {
       const res = await fetch("/api/verify-otp", {
@@ -166,30 +149,39 @@ export default function VoterIdManager() {
         throw new Error(data.message || "OTP verification failed.");
       }
 
-      await pollForWhitelistStatus();
+      // Optimistically update the UI to the next state
+      setState("WHITELISTED");
     } catch (error: unknown) {
       setState("ENTER_OTP");
       if (error instanceof Error) {
-        setLoadingMessage(error.message);
+        // Show the error message, not set it as the loading message
+        setErrorMessage(error.message);
       }
+    } finally {
+      // This 'finally' block GUARANTEES the loader will stop.
+      setLoadingMessage("");
     }
   };
 
   const claimVoterId = async () => {
-    // It now uses the 'signer' from the context for transactions
     if (!signer || !account) return;
 
     setState("LOADING");
-    setLoadingMessage("Preparing transaction... Please confirm in MetaMask.");
+    setLoadingMessage("Preparing transaction...");
     setErrorMessage("");
     try {
       const contract = getContract(signer);
-
       const tx = await contract.claimVoterId();
-      setLoadingMessage(
-        "Minting your Voter ID... Waiting for blockchain confirmation.",
-      );
+
+      setLoadingMessage("Minting your Voter ID...");
       await tx.wait();
+
+      setLoadingMessage("Syncing mint status with database...");
+      await fetch("/api/confirm-mint", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ walletAddress: account }),
+      });
 
       await checkStatus();
     } catch (error: unknown) {
@@ -202,8 +194,8 @@ export default function VoterIdManager() {
   };
 
   const renderContent = () => {
+    // ... (Your renderContent function remains the same as it correctly uses the state variables)
     switch (state) {
-      // The "Connect Wallet" button now calls the function from the context
       case "CONNECT_WALLET":
         return (
           <button
@@ -213,11 +205,8 @@ export default function VoterIdManager() {
             Connect Wallet to Begin
           </button>
         );
-
-      // ... All other cases remain the same ...
       case "CHECKING_STATUS":
         return <p className="text-gray-300">Checking your status...</p>;
-
       case "NOT_WHITELISTED":
         return (
           <div>
@@ -233,7 +222,6 @@ export default function VoterIdManager() {
             </button>
           </div>
         );
-
       case "SHOW_FORM":
         return (
           <form
@@ -275,7 +263,6 @@ export default function VoterIdManager() {
             </button>
           </form>
         );
-
       case "ENTER_OTP":
         return (
           <form onSubmit={handleOtpSubmit} className="space-y-4">
@@ -307,7 +294,6 @@ export default function VoterIdManager() {
             </button>
           </form>
         );
-
       case "WHITELISTED":
         return (
           <div>
@@ -328,7 +314,6 @@ export default function VoterIdManager() {
             ✅ Voter ID Secured!
           </p>
         );
-
       case "ERROR":
         return (
           <div>
@@ -372,7 +357,6 @@ export default function VoterIdManager() {
           </p>
         </div>
       )}
-
       {loadingMessage ? (
         <div className="flex flex-col items-center justify-center min-h-[150px]">
           <svg

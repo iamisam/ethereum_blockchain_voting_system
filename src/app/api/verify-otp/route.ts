@@ -4,22 +4,6 @@ import { ethers } from "ethers";
 import bcryptjs from "bcryptjs"; // Make sure bcryptjs is imported
 import { REGISTRY_CONTRACT_ABI } from "@/lib/constants";
 
-// A robust, type-safe guard to check for Ethers.js revert errors.
-// It safely inspects the 'unknown' error object without violating any rules.
-function isEthersRevertError(
-  error: unknown,
-): error is { revert: { args: string[] } } {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "revert" in error &&
-    typeof (error as any).revert === "object" &&
-    (error as any).revert !== null &&
-    "args" in (error as any).revert &&
-    Array.isArray((error as any).revert.args)
-  );
-}
-
 export async function POST(request: Request) {
   const { email, regNumber, walletAddress, otp } = await request.json();
 
@@ -83,6 +67,9 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
+    const combinedString = `${email.toLowerCase()}|${regNumber.toUpperCase()}|${walletAddress.toLowerCase()}`;
+    console.log(combinedString);
+    const identityHash = ethers.keccak256(ethers.toUtf8Bytes(combinedString));
 
     // If OTP is valid, proceed to whitelist the user on the blockchain
     const provider = new ethers.JsonRpcProvider(SEPOLIA_RPC_URL);
@@ -94,7 +81,10 @@ export async function POST(request: Request) {
     );
 
     try {
-      const tx = await registryContract.addToWhitelist(walletAddress);
+      const tx = await registryContract.addToWhitelist(
+        walletAddress,
+        identityHash,
+      );
       await tx.wait(); // Wait for the transaction to be mined
     } catch (error: unknown) {
       console.error("Blockchain transaction failed:", error);

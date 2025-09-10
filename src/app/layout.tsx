@@ -4,6 +4,7 @@ import { Inter } from "next/font/google";
 import { Vote } from "lucide-react";
 import ConnectWalletButton from "@/components/ConnectWalletButton";
 import { Web3Provider } from "@/context/Web3Context";
+import Link from "next/link";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -16,10 +17,12 @@ export const metadata: Metadata = {
 const Header = () => (
   <header className="sticky top-0 z-50 bg-gray-900/80 backdrop-blur-md">
     <div className="container mx-auto px-6 py-4 flex justify-between items-center border-b border-gray-700">
-      <h1 className="text-2xl font-bold tracking-tighter">
-        <Vote className="inline-block mr-2 text-blue-400" />
-        VeriVote
-      </h1>
+      <Link href="/" className="flex items-center">
+        <h1 className="text-2xl font-bold tracking-tighter">
+          <Vote className="inline-block mr-2 text-blue-400" />
+          VeriVote
+        </h1>
+      </Link>
       <ConnectWalletButton />
     </div>
   </header>

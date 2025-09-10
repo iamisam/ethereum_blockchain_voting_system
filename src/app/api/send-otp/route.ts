@@ -16,6 +16,7 @@ export async function POST(request: Request) {
     );
   }
 
+  // Using your existing variable names
   const MONGODB_URI = process.env.MONGODB_URI;
   const NODEMAILER_EMAIL = process.env.SMTP_EMAIL;
   const NODEMAILER_APP_PASSWORD = process.env.SMTP_PASSWORD;
@@ -37,9 +38,13 @@ export async function POST(request: Request) {
       $or: [{ email }, { regNumber }],
     });
 
-    // --- THIS IS THE NEW, SMARTER LOGIC ---
+    // We generate the OTP here and store it, so the same code is sent in the email and saved in the DB.
+    const otp = generateOTP();
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    const hashedOtp = await bcryptjs.hash(otp, 10);
+    // --- END OF FIX ---
+
     if (existingUser) {
-      // If the user already exists AND is already whitelisted, block them.
       if (existingUser.isWhitelisted) {
         return NextResponse.json(
           { message: "This user is already registered and whitelisted." },
@@ -47,24 +52,13 @@ export async function POST(request: Request) {
         );
       }
 
-      // If the user exists but is NOT whitelisted, they are just trying again.
-      // We will update their record with a new OTP.
-      const otp = generateOTP();
-      const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-      const hashedOtp = await bcryptjs.hash(otp, 10);
-
+      // Update existing user with the new OTP generated above
       await usersCollection.updateOne(
         { _id: existingUser._id },
-        { $set: { otp: hashedOtp, otpExpires, walletAddress } }, // Also update wallet address if they changed it
+        { $set: { otp: hashedOtp, otpExpires, walletAddress } },
       );
-
-      // Now, resend the new OTP via email (code below is the same)
     } else {
-      // If no user exists, create a new one.
-      const otp = generateOTP();
-      const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
-      const hashedOtp = await bcryptjs.hash(otp, 10);
-
+      // Create a new user with the new OTP and the new 'hasMintedNFT' field
       await usersCollection.insertOne({
         email,
         regNumber,
@@ -72,19 +66,17 @@ export async function POST(request: Request) {
         otp: hashedOtp,
         otpExpires,
         isWhitelisted: false,
+        hasMintedNFT: false, // Integrating your new requirement
       });
     }
-    // --- END OF NEW LOGIC ---
 
-    // The email sending part remains the same. We need to get the plain OTP again.
-    const otp = generateOTP(); // NOTE: This is inefficient, we'll use the one from above later. For now, let's keep it simple.
-    // For a real app, you would not regenerate, you'd pass the plain OTP from the logic above.
-
+    // Your existing Nodemailer transport setup
     const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: { user: NODEMAILER_EMAIL, pass: NODEMAILER_APP_PASSWORD },
     });
 
+    // Your existing mailOptions, now using the single, correct OTP
     const mailOptions = {
       from: NODEMAILER_EMAIL,
       to: email,
@@ -93,13 +85,9 @@ export async function POST(request: Request) {
       html: `<p>Your new OTP for VeriVote is: <strong>${otp}</strong>. It will expire in 10 minutes.</p>`,
     };
 
-    // We need to re-hash and save this one to match the email
-    await usersCollection.updateOne(
-      { email },
-      { $set: { otp: await bcryptjs.hash(otp, 10) } },
-    );
-
+    // The logic to resave the OTP is no longer needed as we do it correctly above.
     await transporter.sendMail(mailOptions);
+
     return NextResponse.json(
       { message: "OTP sent successfully." },
       { status: 200 },
