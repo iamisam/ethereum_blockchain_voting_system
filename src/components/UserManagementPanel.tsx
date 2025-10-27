@@ -9,7 +9,7 @@ import { ShieldAlert, ShieldCheck, Trash2 } from "lucide-react";
 const REGISTRY_CONTRACT_ADDRESS =
   process.env.NEXT_PUBLIC_REGISTRY_CONTRACT_ADDRESS;
 
-export default function AdminPanel() {
+export default function UserManagementPanel() {
   const { account, provider } = useWeb3();
   const [contractOwner, setContractOwner] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
