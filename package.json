@@ -12,6 +12,7 @@
     "@pinata/sdk": "^2.1.0",
     "bcryptjs": "^3.0.2",
     "ethers": "^6.15.0",
+    "jsencrypt": "^3.5.4",
     "lucide-react": "^0.542.0",
     "mongodb": "^6.19.0",
     "next": "15.5.2",
