@@ -1,14 +1,19 @@
 "use client";
 
-import { ShieldCheck, Lock, Users, ArrowRight, Layers } from "lucide-react";
+import {
+  ShieldCheck,
+  Lock,
+  Users,
+  ArrowRight,
+  Layers,
+  ListChecks,
+} from "lucide-react";
 import React from "react";
 import Link from "next/link";
-import { Web3Provider } from "@/context/Web3Context";
 
 // Main Page Component
 export default function Home() {
   return (
-    // This new div wraps all sections and applies the grid background to the entire content area
     <div className="bg-grid-gray-700/[0.2]">
       <HeroSection />
       <FeaturesSection />
@@ -19,7 +24,6 @@ export default function Home() {
 
 // Hero Section Component
 const HeroSection = () => (
-  // The background class has been removed from here
   <section className="py-24 md:py-32 text-center">
     <div className="container mx-auto px-6">
       <h2 className="text-4xl md:text-6xl font-extrabold tracking-tight mb-4 bg-gradient-to-r from-blue-400 to-purple-500 text-transparent bg-clip-text">
@@ -30,11 +34,18 @@ const HeroSection = () => (
         students, powered by blockchain technology. Your voice, immutably
         recorded.
       </p>
-      <Link href="/register">
-        <button className="inline-flex items-center justify-center px-8 py-4 font-bold text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-all shadow-lg hover:shadow-blue-500/50 text-lg transform hover:scale-105">
-          Get Started & Register <ArrowRight className="ml-2 h-5 w-5" />
-        </button>
-      </Link>
+      <div className="flex flex-col sm:flex-row justify-center items-center space-y-4 sm:space-y-0 sm:space-x-4">
+        <Link href="/register">
+          <button className="inline-flex items-center justify-center px-8 py-4 font-bold text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-all shadow-lg hover:shadow-blue-500/50 text-lg transform hover:scale-105">
+            Get Started & Register <ArrowRight className="ml-2 h-5 w-5" />
+          </button>
+        </Link>
+        <Link href="/elections">
+          <button className="inline-flex items-center justify-center px-8 py-4 font-semibold text-gray-200 bg-gray-700 rounded-lg hover:bg-gray-600 transition-all shadow-lg hover:shadow-gray-500/50 text-lg transform hover:scale-105">
+            <ListChecks className="mr-2 h-5 w-5" /> View Elections
+          </button>
+        </Link>
+      </div>
     </div>
   </section>
 );
