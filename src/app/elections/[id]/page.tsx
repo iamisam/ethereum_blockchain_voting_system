@@ -3,7 +3,6 @@
 import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import { ethers } from "ethers";
-import { JSEncrypt } from "jsencrypt";
 import { useWeb3 } from "@/context/Web3Context";
 import {
   Vote as VoteIcon,
@@ -15,8 +14,15 @@ import {
   CheckCircle,
   XCircle,
   AlertTriangle,
+  FileCheck,
+  UserCheck,
+  UserX,
+  Trophy,
 } from "lucide-react";
 import ElectionABI from "@/lib/ElectionABI.json";
+import { REGISTRY_CONTRACT_ABI } from "@/lib/constants";
+const REGISTRY_CONTRACT_ADDRESS =
+  process.env.NEXT_PUBLIC_REGISTRY_CONTRACT_ADDRESS;
 
 interface ElectionDetails {
   _id: string;
@@ -25,8 +31,9 @@ interface ElectionDetails {
   endTime: string;
   electionContractAddress: string;
   metadataIpfsHash: string;
-  publicKey: string;
   status: string;
+  resultsIpfsHash?: string | null;
+  winner?: string | null;
 }
 interface ElectionMetadata {
   name: string;
@@ -54,6 +61,14 @@ export default function ElectionDetailPage() {
     message: string;
   } | null>(null); // State for vote feedback
   const [hasAlreadyVoted, setHasAlreadyVoted] = useState<boolean | null>(null); // State to track if user voted
+  const [hasValidNFT, setHasValidNFT] = useState<boolean | null>(null); // Still need to fetch this
+
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [isTallying, setIsTallying] = useState(false);
+  const [tallyFeedback, setTallyFeedback] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
 
   // Data Fetching Effect
   useEffect(() => {
@@ -68,7 +83,8 @@ export default function ElectionDetailPage() {
         const apiRes = await fetch(`/api/get-election-details/${electionId}`);
         if (!apiRes.ok)
           throw new Error((await apiRes.json()).message || "Failed fetch");
-        const details: ElectionDetails = await apiRes.json();
+        const responseData = await apiRes.json();
+        const details: ElectionDetails = JSON.parse(responseData.data);
         setElectionDetails(details);
         if (details.metadataIpfsHash) {
           const ipfsUrl = `https://gateway.pinata.cloud/ipfs/${details.metadataIpfsHash}`;
@@ -116,6 +132,55 @@ export default function ElectionDetailPage() {
 
     checkVotingStatus();
   }, [account, provider, electionDetails]); // Re-check when account or election details load
+
+  useEffect(() => {
+    const checkOwnerStatus = async () => {
+      if (!provider || !account || !REGISTRY_CONTRACT_ADDRESS) {
+        setIsAdmin(false);
+        return;
+      }
+      try {
+        const contract = new ethers.Contract(
+          REGISTRY_CONTRACT_ADDRESS,
+          REGISTRY_CONTRACT_ABI,
+          provider,
+        );
+        const owner = await contract.owner();
+        setIsAdmin(account.toLowerCase() === owner.toLowerCase());
+      } catch (error) {
+        console.error("Failed admin check on detail page:", error);
+        setIsAdmin(false);
+      }
+    };
+    checkOwnerStatus();
+  }, [account, provider]);
+
+  useEffect(() => {
+    const checkNFTStatus = async () => {
+      // Guard clause: Exit if essential data isn't ready
+      if (!account || !provider || !REGISTRY_CONTRACT_ADDRESS) {
+        setHasValidNFT(false); // Assume invalid if we can't check
+        return;
+      }
+      try {
+        // Create a read-only instance of the GlobalRegistry contract
+        const registryContract = new ethers.Contract(
+          REGISTRY_CONTRACT_ADDRESS,
+          REGISTRY_CONTRACT_ABI,
+          provider,
+        );
+        // Call the hasMinted function (secure check due to SBT nature)
+        const valid = await registryContract.hasMinted(account);
+        setHasValidNFT(valid); // Update state with the result
+      } catch (err) {
+        console.error("Failed to check Voter ID NFT status:", err);
+        setHasValidNFT(false); // Assume invalid on any error during check
+      } finally {
+      }
+    };
+
+    checkNFTStatus();
+  }, [account, provider]);
 
   const candidates =
     metadata?.attributes?.find((attr) => attr.trait_type === "Candidates")
@@ -170,23 +235,61 @@ export default function ElectionDetailPage() {
     setVoteFeedback(null);
     setError(null); // Clear previous page-level errors
 
+    if (!signer || !account) {
+      setVoteFeedback({
+        type: "error",
+        message: "Wallet not connected. Please connect your wallet.",
+      });
+      setIsVoting(false);
+      return;
+    }
+    if (!electionDetails || !metadata) {
+      setVoteFeedback({
+        type: "error",
+        message: "Election data not loaded correctly.",
+      });
+      setIsVoting(false);
+      return;
+    }
+    if (!currentStatus.isActive) {
+      setVoteFeedback({
+        type: "error",
+        message: "This election is not currently active.",
+      });
+      setIsVoting(false);
+      return;
+    }
+    if (!selectedCandidate) {
+      setVoteFeedback({
+        type: "error",
+        message: "Please select a candidate before casting your vote.",
+      });
+      setIsVoting(false);
+      return;
+    }
+    // Explicitly check NFT and Voted status here
+    if (hasValidNFT !== true) {
+      setVoteFeedback({
+        type: "error",
+        message: "You do not hold a valid Voter ID NFT for this account.",
+      });
+      setIsVoting(false);
+      return;
+    }
+    if (hasAlreadyVoted !== false) {
+      // Handle both null (still checking) and true (already voted)
+      setVoteFeedback({
+        type: "error",
+        message:
+          hasAlreadyVoted === true
+            ? "You have already voted in this election."
+            : "Could not confirm voting status. Please wait or refresh.",
+      });
+      setIsVoting(false);
+      return;
+    }
+
     try {
-      // 1. Encrypt the Vote
-      const encrypt = new JSEncrypt();
-      encrypt.setPublicKey(electionDetails.publicKey);
-      const encryptedVoteString = encrypt.encrypt(selectedCandidate);
-
-      if (!encryptedVoteString) {
-        throw new Error("Encryption failed. The public key might be invalid.");
-      }
-
-      // Convert encrypted string (likely base64) to bytes for Solidity
-      // ethers.toUtf8Bytes might work if the output is plain text, but often it's base64
-      // Let's assume base64 output from jsencrypt and convert that to hex bytes
-      const encryptedVoteBytes = ethers.hexlify(
-        ethers.decodeBase64(encryptedVoteString),
-      );
-
       // 2. Prepare Contract Interaction
       const electionContract = new ethers.Contract(
         electionDetails.electionContractAddress,
@@ -196,7 +299,7 @@ export default function ElectionDetailPage() {
 
       // 3. Send Transaction
       console.log("Submitting vote transaction...");
-      const tx = await electionContract.submitVote(encryptedVoteBytes);
+      const tx = await electionContract.submitVote(selectedCandidate);
       console.log("Transaction sent:", tx.hash);
       setVoteFeedback({
         type: "success",
@@ -220,6 +323,36 @@ export default function ElectionDetailPage() {
       }
     } finally {
       setIsVoting(false);
+    }
+  };
+
+  const handleTally = async () => {
+    if (!electionId || !isAdmin) return;
+
+    setIsTallying(true);
+    setTallyFeedback(null);
+    setError(null); // Clear page-level errors
+
+    try {
+      const res = await fetch("/api/tally-results", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: electionId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Tally failed");
+      setTallyFeedback({
+        type: "success",
+        message: data.message || "Tally successful!",
+      });
+      // Optionally: Re-fetch election details to update status display immediately
+      // await fetchElectionData(); // You'd need to extract fetchElectionData
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        setTallyFeedback({ type: "error", message: `Error: ${error.message}` });
+      }
+    } finally {
+      setIsTallying(false);
     }
   };
 
@@ -252,9 +385,16 @@ export default function ElectionDetailPage() {
     );
   }
 
+  const resultsAvailable =
+    electionDetails.status === "Tallied" && !!electionDetails?.resultsIpfsHash;
+
+  // --- MAIN RENDER ---
+  // Since we passed the checks (isLoading, error, !electionDetails || !metadata) before this,
+  // we know electionDetails and metadata are guaranteed non-null here.
   return (
     <div className="container mx-auto px-6 py-16 md:py-24">
       <div className="max-w-3xl mx-auto bg-gray-800 border border-gray-700 rounded-2xl shadow-lg p-8">
+        {/* Header Section */}
         <h1 className="text-4xl font-bold mb-4">
           {metadata.name || electionDetails.title}
         </h1>
@@ -284,47 +424,88 @@ export default function ElectionDetailPage() {
             </p>
           </div>
         </div>
+
+        {/* Description */}
         <p className="text-gray-300 mb-8">{metadata.description}</p>
 
-        <div className="mb-12">
-          <h2 className="text-2xl font-semibold mb-5 border-b border-gray-600 pb-2">
-            Select a Candidate
-          </h2>
-          {Array.isArray(candidates) && candidates.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {candidates.map((candidate, index) => (
-                <button // Changed to button for better accessibility
-                  key={index}
-                  onClick={() => setSelectedCandidate(candidate)}
-                  // Highlight selected candidate
-                  className={`w-full p-4 bg-gray-700 rounded-lg text-left shadow-sm border transition-all duration-150
-                                        ${
-                                          selectedCandidate === candidate
-                                            ? "border-blue-500 ring-2 ring-blue-500/50" // Selected style
-                                            : "border-gray-600 hover:border-blue-600" // Default style
-                                        }
-                                    `}
-                  // Disable selection if not active or already voted
-                  disabled={
-                    !currentStatus.isActive ||
-                    isVoting ||
-                    hasAlreadyVoted === true
-                  }
-                >
-                  <span
-                    className={`text-lg font-medium ${selectedCandidate === candidate ? "text-blue-100" : "text-gray-100"}`}
+        {/* --- Conditionally Render Candidates or Results --- */}
+        {resultsAvailable ? (
+          <div className="mb-12">
+            <h2 className="text-2xl font-semibold mb-5 border-b border-gray-600 pb-2">
+              Election Results
+            </h2>
+            {/* Accessing resultsIpfsHash is now safe */}
+            {electionDetails.winner && (
+              <div className="text-center p-6 bg-yellow-900/50 border border-yellow-700 rounded-lg mb-6">
+                <Trophy className="mx-auto h-12 w-12 text-yellow-400" />
+                <h3 className="mt-4 text-lg font-semibold text-gray-200">
+                  Winner
+                </h3>
+                <p className="text-3xl font-bold text-white mt-1">
+                  {electionDetails.winner}
+                </p>
+              </div>
+            )}
+            <p className="text-gray-400 italic">
+              Full tally results are stored permanently on IPFS.
+            </p>
+            {electionDetails.resultsIpfsHash && (
+              <a
+                href={`https://gateway.pinata.cloud/ipfs/${electionDetails.resultsIpfsHash}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-400 hover:underline text-sm mt-2 block"
+              >
+                View Raw Results on IPFS
+              </a>
+            )}
+          </div>
+        ) : (
+          <div className="mb-12">
+            {" "}
+            {/* Increased margin */}
+            <h2 className="text-2xl font-semibold mb-5 border-b border-gray-600 pb-2">
+              Select a Candidate
+            </h2>
+            {Array.isArray(candidates) && candidates.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {candidates.map((candidate, index) => (
+                  <button
+                    key={index}
+                    onClick={() => setSelectedCandidate(candidate)}
+                    className={`w-full p-4 bg-gray-700 rounded-lg text-left shadow-sm border transition-all duration-150
+                          ${
+                            selectedCandidate === candidate
+                              ? "border-blue-500 ring-2 ring-blue-500/50" // Selected style
+                              : "border-gray-600 hover:border-blue-600" // Default style
+                          }
+                          ${!currentStatus.isActive ? "cursor-not-allowed opacity-70" : "hover:border-blue-500"}
+                        `}
+                    disabled={
+                      !currentStatus.isActive || // Only disable based on election status
+                      isVoting
+                    }
                   >
-                    {candidate}
-                  </span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <p className="text-gray-500 italic">No candidates listed.</p>
-          )}
-        </div>
+                    <span
+                      className={`text-lg font-medium ${selectedCandidate === candidate ? "text-blue-100" : "text-gray-100"}`}
+                    >
+                      {candidate}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="text-gray-500 italic">No candidates listed.</p>
+            )}
+          </div>
+        )}
+        {/* --- END Conditional Rendering --- */}
 
+        {/* --- Voting / Tallying Action Area --- */}
         <div className="text-center border-t border-gray-600 pt-8">
+          {" "}
+          {/* Increased padding */}
+          {/* Display Vote Feedback (if any) */}
           {voteFeedback && (
             <div
               className={`mb-6 p-4 rounded-md text-center text-sm ${
@@ -341,60 +522,119 @@ export default function ElectionDetailPage() {
               {voteFeedback.message}
             </div>
           )}
-
-          {hasAlreadyVoted === true && !voteFeedback && (
-            <div className="mb-6 p-4 rounded-md text-center text-sm bg-blue-900/50 text-blue-300 border border-blue-700">
-              <CheckCircle className="inline mr-2" size={18} /> You have already
-              voted in this election.
+          {/* Display Already Voted Message */}
+          {hasAlreadyVoted === true &&
+            !voteFeedback &&
+            !resultsAvailable && ( // Added !resultsAvailable
+              <div className="mb-6 p-4 rounded-md text-center text-sm bg-blue-900/50 text-blue-300 border border-blue-700">
+                <CheckCircle className="inline mr-2" size={18} /> You have
+                already voted in this election.
+              </div>
+            )}
+          {/* Display Tally Feedback (if any) */}
+          {tallyFeedback && (
+            <div
+              className={`mb-6 p-4 rounded-md text-center text-sm ${
+                tallyFeedback.type === "success"
+                  ? "bg-green-900/50 text-green-300 border border-green-700"
+                  : tallyFeedback.type === "error"
+                    ? "bg-red-900/50 text-red-300 border border-red-700"
+                    : "" // Should ideally not happen if loading state handled by button
+              }`}
+            >
+              {tallyFeedback.type === "success" ? (
+                <CheckCircle className="inline mr-2" size={18} />
+              ) : tallyFeedback.type === "error" ? (
+                <XCircle className="inline mr-2" size={18} />
+              ) : null}
+              {tallyFeedback.message}
             </div>
           )}
-
-          <button
-            onClick={handleVote}
-            className="inline-flex items-center justify-center px-8 py-4 font-bold text-white bg-green-600 rounded-lg hover:bg-green-700 transition-all shadow-lg hover:shadow-green-500/50 text-lg disabled:bg-gray-600 disabled:cursor-not-allowed disabled:shadow-none disabled:opacity-50"
-            // Disable button logic
-            disabled={
-              !currentStatus.isActive ||
-              isVoting ||
-              !selectedCandidate ||
-              hasAlreadyVoted === true
-            }
-          >
-            {isVoting ? (
-              <Loader2 className="animate-spin mr-2 h-6 w-6" />
-            ) : (
-              <VoteIcon className="mr-2 h-6 w-6" />
+          {/* --- Conditional Button Logic --- */}
+          {/* Show Tally Button if Admin, Ended, and Not Tallied */}
+          {isAdmin &&
+            currentStatus.text === "Ended" &&
+            electionDetails.status !== "Tallied" && (
+              <button
+                onClick={handleTally}
+                disabled={isTallying}
+                className="inline-flex items-center justify-center px-8 py-4 font-bold text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-all shadow-lg hover:shadow-purple-500/50 text-lg disabled:bg-gray-600 disabled:cursor-not-allowed"
+              >
+                <FileCheck className="mr-2 h-6 w-6" />
+                {isTallying ? "Tallying..." : "Tally Results"}
+              </button>
             )}
-            {isVoting
-              ? "Submitting Vote..."
-              : currentStatus.isActive
-                ? "Cast Vote"
-                : "Voting Ended"}
-          </button>
-
-          {!currentStatus.isActive && hasAlreadyVoted !== true && (
-            <p className="text-sm text-yellow-400 mt-4">
+          {/* Show Vote Button if Active and Not Admin (and results not available) */}
+          {!isAdmin && currentStatus.isActive && !resultsAvailable && (
+            <button
+              onClick={handleVote}
+              className="inline-flex items-center justify-center px-8 py-4 font-bold text-white bg-green-600 rounded-lg hover:bg-green-700 transition-all shadow-lg hover:shadow-green-500/50 text-lg disabled:bg-gray-600 disabled:cursor-not-allowed disabled:shadow-none disabled:opacity-50"
+              disabled={
+                isVoting || !selectedCandidate // Only disable if voting or no selection
+              }
+            >
+              {isVoting ? (
+                <Loader2 className="animate-spin mr-2 h-6 w-6" />
+              ) : (
+                <VoteIcon className="mr-2 h-6 w-6" />
+              )}
+              {isVoting ? "Submitting..." : "Cast Vote"}
+            </button>
+          )}
+          {/* Show "Voting Ended" Button if Ended and Not Tallied (for non-admins) */}
+          {!isAdmin &&
+            currentStatus.text === "Ended" &&
+            electionDetails.status !== "Tallied" && (
+              <button
+                className="inline-flex items-center justify-center px-8 py-4 font-bold text-white bg-gray-600 rounded-lg cursor-not-allowed opacity-50 text-lg"
+                disabled={true}
+              >
+                <VoteIcon className="mr-2 h-6 w-6" /> Voting Ended
+              </button>
+            )}
+          {/* --- Messages --- */}
+          {/* Show message if Upcoming */}
+          {currentStatus.text === "Upcoming" && (
+            <p className="text-sm text-blue-400 mt-4">
+              {" "}
+              {/* Increased margin */}
               <Info size={14} className="inline mr-1" />
-              Voting is{" "}
-              {currentStatus.text === "Upcoming"
-                ? "not yet open"
-                : "closed"}{" "}
-              for this election.
+              Voting is not yet open for this election.
             </p>
           )}
+          {/* Show message if Ended and Tallied (Results Ready) */}
+          {resultsAvailable && (
+            <p className="text-sm text-green-400 mt-4">
+              {" "}
+              {/* Increased margin */}
+              <CheckCircle size={14} className="inline mr-1" />
+              Election results have been tallied. See results section above.
+            </p>
+          )}
+          {/* Show message if wallet not connected */}
           {!account && (
             <p className="text-sm text-yellow-400 mt-4">
+              {" "}
+              {/* Increased margin */}
               <AlertTriangle size={14} className="inline mr-1" />
-              Please connect your wallet to vote.
+              Please connect your wallet to participate.
             </p>
           )}
-          {hasAlreadyVoted === true && !voteFeedback && (
-            <p className="text-sm text-green-400 mt-4">
-              Your vote has been recorded.
-            </p>
-          )}
+          {/* Message to select candidate if eligible but hasn't selected */}
+          {!isAdmin &&
+            currentStatus.isActive &&
+            !resultsAvailable &&
+            !selectedCandidate &&
+            !isVoting &&
+            hasAlreadyVoted !== true && (
+              <p className="text-sm text-blue-400 mt-4">
+                Please select a candidate above before casting your vote.
+              </p>
+            )}
         </div>
+        {/* --- END Action Area --- */}
 
+        {/* Contract Link */}
         <div className="text-center mt-8 pt-4 border-t border-gray-700">
           <a
             href={`https://sepolia.etherscan.io/address/${electionDetails.electionContractAddress}`}

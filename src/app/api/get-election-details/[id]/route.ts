@@ -5,8 +5,8 @@ interface ElectionDetailsParams {
   params: { id: string };
 }
 
-export async function GET(request: Request, { params }: ElectionDetailsParams) {
-  const electionId = params.id;
+export async function GET(request: Request, context: ElectionDetailsParams) {
+  const electionId = context.params.id;
 
   if (!electionId || !ObjectId.isValid(electionId)) {
     return NextResponse.json(
@@ -56,12 +56,18 @@ export async function GET(request: Request, { params }: ElectionDetailsParams) {
           : String(election.endTime),
       electionContractAddress: election.electionContractAddress,
       metadataIpfsHash: election.metadataIpfsHash,
-      publicKey: election.publicKey,
       status: election.status,
+      resultsIpfsHash: election.resultsIpfsHash || null,
+      winner: election.winner || null,
       // DO NOT include the whole 'election' object, only the fields we need.
     };
 
-    return NextResponse.json(plainElectionDetails, { status: 200 });
+    // Force serialization by stringifying the object before sending.
+    // We'll send it within a wrapper object for clarity on the client.
+    return NextResponse.json(
+      { data: JSON.stringify(plainElectionDetails) },
+      { status: 200 },
+    );
   } catch (error) {
     console.error(`Error fetching election details for ${electionId}:`, error);
     return NextResponse.json(

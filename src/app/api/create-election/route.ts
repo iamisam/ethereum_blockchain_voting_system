@@ -1,26 +1,10 @@
 import { NextResponse } from "next/server";
 import { MongoClient } from "mongodb";
 import { ethers, ContractFactory } from "ethers";
-import NodeRSA from "node-rsa";
-import crypto from "crypto";
 import pinataSDK, { PinataPinOptions } from "@pinata/sdk";
 import { REGISTRY_CONTRACT_ABI } from "@/lib/constants";
 import ElectionABI from "@/lib/ElectionABI.json";
 import ElectionBytecode from "@/lib/ElectionBytecode.json";
-
-const encryptKey = (text: string, secret: string): string => {
-  const iv = crypto.randomBytes(16);
-  const key = crypto
-    .createHash("sha256")
-    .update(String(secret))
-    .digest("base64")
-    .substring(0, 32);
-  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
-  let encrypted = cipher.update(text, "utf8", "hex");
-  encrypted += cipher.final("hex");
-  const authTag = cipher.getAuthTag();
-  return iv.toString("hex") + ":" + authTag.toString("hex") + ":" + encrypted;
-};
 
 async function isAdmin(
   provider: ethers.Provider,
@@ -48,7 +32,6 @@ export async function POST(request: Request) {
   const OWNER_PRIVATE_KEY = process.env.BACKEND_WALLET_PRIVATE_KEY;
   const REGISTRY_CONTRACT_ADDRESS = process.env.REGISTRY_CONTRACT_ADDRESS;
   const SEPOLIA_RPC_URL = process.env.SEPOLIA_RPC_URL;
-  const ENCRYPTION_SECRET = process.env.ENCRYPTION_SECRET;
   const PINATA_API_KEY = process.env.PINATA_API_KEY;
   const PINATA_SECRET_API_KEY = process.env.PINATA_SECRET_API_KEY;
 
@@ -57,7 +40,6 @@ export async function POST(request: Request) {
     !OWNER_PRIVATE_KEY ||
     !REGISTRY_CONTRACT_ADDRESS ||
     !SEPOLIA_RPC_URL ||
-    !ENCRYPTION_SECRET ||
     !PINATA_API_KEY ||
     !PINATA_SECRET_API_KEY
   ) {
@@ -116,12 +98,6 @@ export async function POST(request: Request) {
     const db = client.db();
     const electionsCollection = db.collection("elections");
 
-    // --- Step 1: Generate Key Pair (remains the same) ---
-    const key = new NodeRSA({ b: 2048 });
-    const publicKey = key.exportKey("public");
-    const privateKey = key.exportKey("private");
-    const encryptedPrivateKey = encryptKey(privateKey, ENCRYPTION_SECRET);
-
     // --- Step 2: Upload Metadata to IPFS using Pinata ---
     console.log("Uploading election metadata to IPFS via Pinata...");
     const pinata = new pinataSDK(PINATA_API_KEY, PINATA_SECRET_API_KEY);
@@ -170,11 +146,20 @@ export async function POST(request: Request) {
       electionData.startTimeUnix,
       electionData.endTimeUnix,
       metadataIpfsHash, // Use the REAL hash now
-      publicKey,
     );
-    await electionContract.waitForDeployment();
+
+    // Wait for the deployment transaction itself to be mined and get the receipt
+    const deployTxReceipt = await electionContract
+      .deploymentTransaction()
+      ?.wait(1); // Wait for 1 confirmation
+    if (!deployTxReceipt) {
+      throw new Error("Failed to get deployment transaction receipt.");
+    }
+    const deploymentBlockNumber = deployTxReceipt.blockNumber;
     const electionContractAddress = await electionContract.getAddress();
-    console.log("Election contract deployed at:", electionContractAddress);
+    console.log(
+      `Election contract deployed at: ${electionContractAddress} in block ${deploymentBlockNumber}`,
+    );
 
     // --- Step 4: Store Election Details in DB (remains the same, uses new hash) ---
     const newElection = {
@@ -184,8 +169,7 @@ export async function POST(request: Request) {
       endTime: new Date(electionData.endTime),
       electionContractAddress: electionContractAddress,
       metadataIpfsHash: metadataIpfsHash, // Use the REAL hash
-      encryptedPrivateKey: encryptedPrivateKey,
-      publicKey: publicKey,
+      deploymentBlockNumber: deploymentBlockNumber, // Store the block number
       status: "Created",
       createdAt: new Date(),
     };
