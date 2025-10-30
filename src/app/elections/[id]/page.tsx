@@ -15,8 +15,6 @@ import {
   XCircle,
   AlertTriangle,
   FileCheck,
-  UserCheck,
-  UserX,
   Trophy,
 } from "lucide-react";
 import ElectionABI from "@/lib/ElectionABI.json";

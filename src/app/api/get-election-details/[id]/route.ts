@@ -1,12 +1,15 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { MongoClient, ObjectId } from "mongodb";
 
 interface ElectionDetailsParams {
   params: { id: string };
 }
 
-export async function GET(request: Request, context: ElectionDetailsParams) {
-  const electionId = context.params.id;
+export async function GET(
+  request: NextRequest,
+  { params }: ElectionDetailsParams,
+) {
+  const electionId = params.id;
 
   if (!electionId || !ObjectId.isValid(electionId)) {
     return NextResponse.json(
