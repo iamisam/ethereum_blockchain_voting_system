@@ -7,15 +7,18 @@ import { REGISTRY_CONTRACT_ABI } from "@/lib/constants";
 function isEthersRevertError(
   error: unknown,
 ): error is { revert: { args: string[] } } {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "revert" in error &&
-    typeof (error as any).revert === "object" &&
-    (error as any).revert !== null &&
-    "args" in (error as any).revert &&
-    Array.isArray((error as any).revert.args)
-  );
+  if (typeof error === "object" && error !== null && "revert" in error) {
+    const revert = (error as Record<string, unknown>).revert;
+    if (
+      typeof revert === "object" &&
+      revert !== null &&
+      "args" in revert &&
+      Array.isArray((revert as Record<string, unknown>).args)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export async function POST(request: Request) {
