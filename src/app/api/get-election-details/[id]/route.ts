@@ -2,14 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { MongoClient, ObjectId } from "mongodb";
 
 interface ElectionDetailsParams {
-  params: { id: string };
+  params: Promise<{
+    id: string;
+  }>;
 }
 
 export async function GET(
   request: NextRequest,
   { params }: ElectionDetailsParams,
 ) {
-  const electionId = params.id;
+  const { id: electionId } = await params;
 
   if (!electionId || !ObjectId.isValid(electionId)) {
     return NextResponse.json(
