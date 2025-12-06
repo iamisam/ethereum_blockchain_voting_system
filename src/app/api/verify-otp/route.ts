@@ -88,17 +88,23 @@ export async function POST(request: Request) {
       await tx.wait(); // Wait for the transaction to be mined
     } catch (error: unknown) {
       console.error("Blockchain transaction failed:", error);
-      // Check if the error is a contract revert with a specific reason
-      if (error.revert) {
+
+      // Type guard for error object
+      if (error && typeof error === "object" && "revert" in error) {
+        const contractError = error as { revert: { args: string[] } };
         return NextResponse.json(
-          { message: `Contract Error: ${error.revert.args[0]}` },
+          { message: `Contract Error: ${contractError.revert.args[0]}` },
           { status: 400 },
         );
       }
-      return NextResponse.json(
-        { message: "Failed to whitelist on the blockchain." },
-        { status: 500 },
-      );
+
+      // Handle generic error message
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Failed to whitelist on the blockchain.";
+
+      return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 
     // Mark the user as whitelisted in the database
